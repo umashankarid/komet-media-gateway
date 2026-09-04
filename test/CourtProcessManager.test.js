@@ -3,17 +3,22 @@ import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import { CourtProcessManager } from "../src/CourtProcessManager.js";
 
-/** A fake child process that records kills and can emit exit. */
+/** A fake child process that records kills and can emit exit/stderr. */
 class FakeProc extends EventEmitter {
   constructor() {
     super();
     this.killed = false;
     this.killSignal = undefined;
+    this.stderr = new EventEmitter();
   }
   kill(signal) {
     this.killed = true;
     this.killSignal = signal;
     this.emit("exit", 0, signal);
+  }
+  /** Simulate FFmpeg emitting a stderr chunk. */
+  emitStderr(text) {
+    this.stderr.emit("data", Buffer.from(text));
   }
 }
 
@@ -118,5 +123,44 @@ describe("CourtProcessManager", () => {
     m.start(2, "rtmp://x/live2/b");
     m.stopAll();
     assert.equal(m.status().length, 0);
+  });
+
+  it("reports connected only after ffmpeg emits progress", () => {
+    const spawn = fakeSpawn();
+    const m = new CourtProcessManager({ spawnFn: spawn.fn });
+    m.start(1, "rtmp://x/live2/a");
+    // Running but no data yet.
+    assert.equal(m.courtStatus(1).running, true);
+    assert.equal(m.courtStatus(1).connected, false);
+    // FFmpeg emits a progress line → connected.
+    spawn.procs[0].emitStderr("frame=  120 fps= 30 q=-1.0 size=1024kB bitrate=6000.0kbits/s");
+    assert.equal(m.courtStatus(1).connected, true);
+    assert.equal(m.courtStatus(1).lastSeenAt > 0, true);
+  });
+
+  it("parses resolution, fps and bitrate from ffmpeg output", () => {
+    const spawn = fakeSpawn();
+    const m = new CourtProcessManager({ spawnFn: spawn.fn });
+    m.start(1, "rtmp://x/live2/a");
+    spawn.procs[0].emitStderr(
+      "Stream #0:0: Video: h264, yuv420p, 1920x1080, 30 fps",
+    );
+    spawn.procs[0].emitStderr("frame=  10 fps= 30 bitrate=6034.0kbits/s");
+    const s = m.courtStatus(1);
+    assert.equal(s.connected, true);
+    assert.equal(s.media.width, 1920);
+    assert.equal(s.media.height, 1080);
+    assert.equal(s.media.fps, 30);
+    assert.equal(s.media.bitrateKbps, 6034);
+  });
+
+  it("treats stale progress as not connected", () => {
+    const spawn = fakeSpawn();
+    const m = new CourtProcessManager({ spawnFn: spawn.fn, ingestFreshnessMs: 5 });
+    m.start(1, "rtmp://x/live2/a");
+    spawn.procs[0].emitStderr("frame= 1 bitrate=100.0kbits/s");
+    // Force lastProgressAt into the past.
+    m.courts.get(1).lastProgressAt = Date.now() - 1000;
+    assert.equal(m.courtStatus(1).connected, false);
   });
 });

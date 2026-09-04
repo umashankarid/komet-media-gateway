@@ -15,7 +15,6 @@ fi
 echo "Listening for SRT on UDP port ${SRT_PORT}"
 
 ffmpeg \
-  -listen 1 \
   -i "srt://0.0.0.0:${SRT_PORT}?mode=listener&latency=200000" \
   -c:v copy \
   -c:a aac \

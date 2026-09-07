@@ -23,6 +23,8 @@ export class CourtProcessManager {
     this.srtLatencyMicros = opts.srtLatencyMicros ?? 200000;
     /** How recent FFmpeg progress must be to count as "connected" (ms). */
     this.ingestFreshnessMs = opts.ingestFreshnessMs ?? 10000;
+    /** Log FFmpeg stderr to the gateway console (for diagnostics). */
+    this.logFfmpeg = opts.logFfmpeg ?? true;
     /** @type {Map<number, { proc: import("node:child_process").ChildProcess, rtmpUrl: string, startedAt: number, srtPort: number }>} */
     this.courts = new Map();
   }
@@ -87,14 +89,26 @@ export class CourtProcessManager {
         if (!cur || cur.proc !== proc) return;
         const text = chunk.toString();
         this.parseProgress(cur, text);
+        // Log ffmpeg output so failures are visible in the gateway logs.
+        if (this.logFfmpeg) {
+          process.stderr.write(`[court ${courtId}] ${text}`);
+        }
       });
     }
 
     // Clean up bookkeeping when the process exits on its own.
     if (proc && typeof proc.on === "function") {
-      proc.on("exit", () => {
+      proc.on("exit", (code, signal) => {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[court ${courtId}] ffmpeg exited code=${code} signal=${signal}`,
+        );
         const cur = this.courts.get(courtId);
         if (cur && cur.proc === proc) this.courts.delete(courtId);
+      });
+      proc.on("error", (err) => {
+        // eslint-disable-next-line no-console
+        console.log(`[court ${courtId}] ffmpeg spawn error: ${err.message}`);
       });
     }
     return { courtId, srtPort, rtmpUrl };

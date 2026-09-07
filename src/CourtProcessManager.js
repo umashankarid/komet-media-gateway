@@ -75,25 +75,36 @@ export class CourtProcessManager {
     const display = opts.display || ":99";
     const vBitrate = opts.videoBitrate || "6000k";
     return [
+      // Larger input queues avoid "Thread message queue blocking" stalls when
+      // mixing the live SRT input with the x11grab display.
+      "-thread_queue_size", "512",
+      "-fflags", "+genpts",
       "-f", "mpegts",
       "-i", srtInput,
       // Second input: the virtual display where Chromium renders the overlay.
+      "-thread_queue_size", "512",
       "-f", "x11grab",
       "-framerate", "30",
       "-video_size", "1920x1080",
       "-i", display,
-      // Overlay the captured page (in2) onto the scaled phone video (in1).
+      // Scale phone video to 1080p, force 30fps (the phone stream reports a 90k
+      // timebase that FFmpeg otherwise misreads as 90k fps and x264 rejects),
+      // then overlay the captured page on top.
       "-filter_complex",
-      "[0:v]scale=1920:1080[bg];[bg][1:v]overlay=0:0:format=auto[v]",
+      "[0:v]scale=1920:1080,fps=30,setpts=PTS-STARTPTS[bg];[bg][1:v]overlay=0:0:format=auto[v]",
       "-map", "[v]",
       "-map", "0:a?",
+      "-r", "30",
       "-c:v", "libx264",
       "-preset", "veryfast",
       "-tune", "zerolatency",
       "-b:v", vBitrate,
+      "-maxrate", vBitrate,
+      "-bufsize", "12000k",
       "-pix_fmt", "yuv420p",
       "-g", "60",
       "-c:a", "aac",
+      "-ar", "44100",
       "-f", "flv",
       rtmpUrl,
     ];

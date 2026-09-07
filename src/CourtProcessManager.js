@@ -72,38 +72,35 @@ export class CourtProcessManager {
 
     // Overlay burn-in: composite the X11 display (transparent overlay page,
     // rendered by Chromium into Xvfb) over the phone video, then encode.
+    // Kept at 720p with ultrafast to fit a 2-vCPU VPS in real time; upscaling
+    // to 1080p pushed encode below real-time (speed < 1x) and stalled ingest.
     const display = opts.display || ":99";
-    const vBitrate = opts.videoBitrate || "6000k";
+    const vBitrate = opts.videoBitrate || "3500k";
     return [
-      // Larger input queues avoid "Thread message queue blocking" stalls when
-      // mixing the live SRT input with the x11grab display.
       "-thread_queue_size", "512",
       "-fflags", "+genpts",
       "-f", "mpegts",
       "-i", srtInput,
-      // Second input: the virtual display where Chromium renders the overlay.
       "-thread_queue_size", "512",
       "-f", "x11grab",
       "-framerate", "30",
       "-video_size", "1920x1080",
       "-i", display,
-      // Scale phone video to 1080p @ 30fps, colorkey the green background out
-      // of the overlay grab (so only the scoreboard/ticker remain), then
-      // overlay it. The phone stream reports a 90k timebase FFmpeg otherwise
-      // misreads as 90k fps, so fps=30 is required.
+      // Keep phone video at 720p @ 30fps; colorkey the overlay's green out,
+      // scale the (1080p) grab down to 720p, then overlay it.
       "-filter_complex",
-      "[0:v]scale=1920:1080,fps=30,setpts=PTS-STARTPTS[bg];" +
-        "[1:v]colorkey=0x00ff00:0.3:0.2[ov];" +
+      "[0:v]scale=1280:720,fps=30,setpts=PTS-STARTPTS[bg];" +
+        "[1:v]colorkey=0x00ff00:0.3:0.2,scale=1280:720[ov];" +
         "[bg][ov]overlay=0:0:format=auto[v]",
       "-map", "[v]",
       "-map", "0:a?",
       "-r", "30",
       "-c:v", "libx264",
-      "-preset", "veryfast",
+      "-preset", "ultrafast",
       "-tune", "zerolatency",
       "-b:v", vBitrate,
       "-maxrate", vBitrate,
-      "-bufsize", "12000k",
+      "-bufsize", "7000k",
       "-pix_fmt", "yuv420p",
       "-g", "60",
       "-c:a", "aac",

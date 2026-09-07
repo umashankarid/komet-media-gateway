@@ -48,7 +48,6 @@ describe("CourtProcessManager", () => {
     const args = m.buildArgs(1, "rtmp://a.rtmp.youtube.com/live2/key1");
     assert.ok(args.includes("-i"));
     assert.ok(args.some((a) => a.includes("srt://0.0.0.0:10001?mode=listener")));
-    assert.ok(args.some((a) => a.includes("listen_timeout=-1")));
     // codec/format flags present
     const joined = args.join(" ");
     assert.ok(joined.includes("-c:v copy"));

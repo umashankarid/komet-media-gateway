@@ -37,19 +37,18 @@ export class CourtProcessManager {
   /** Build the FFmpeg args: SRT listener input -> FLV/RTMP output. */
   buildArgs(courtId, rtmpUrl) {
     const port = this.srtPort(courtId);
-    // The SRT payload from phone encoders is MPEG-TS. Tell FFmpeg the input
-    // format explicitly and give it a generous probe window so it can detect
-    // the H.264/AAC codecs before giving up ("could not find codec parameters").
-    // listen_timeout=-1 keeps the listener waiting indefinitely for the phone.
+    // Give FFmpeg a generous probe window so it can detect the H.264 video and
+    // audio from the SRT/MPEG-TS stream before giving up ("could not find codec
+    // parameters"). We let FFmpeg auto-detect the container (forcing -f mpegts
+    // can misfire with some phone encoders). listen_timeout=-1 keeps the
+    // listener waiting indefinitely for the phone (caller).
     return [
       "-fflags",
-      "+genpts",
+      "+genpts+igndts",
       "-analyzeduration",
-      "10000000", // 10s
+      "20000000", // 20s
       "-probesize",
-      "10000000", // 10MB
-      "-f",
-      "mpegts",
+      "20000000", // 20MB
       "-i",
       `srt://0.0.0.0:${port}?mode=listener&latency=${this.srtLatencyMicros}&listen_timeout=-1`,
       "-c:v",

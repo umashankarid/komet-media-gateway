@@ -87,11 +87,14 @@ export class CourtProcessManager {
       "-framerate", "30",
       "-video_size", "1920x1080",
       "-i", display,
-      // Scale phone video to 1080p, force 30fps (the phone stream reports a 90k
-      // timebase that FFmpeg otherwise misreads as 90k fps and x264 rejects),
-      // then overlay the captured page on top.
+      // Scale phone video to 1080p @ 30fps, colorkey the green background out
+      // of the overlay grab (so only the scoreboard/ticker remain), then
+      // overlay it. The phone stream reports a 90k timebase FFmpeg otherwise
+      // misreads as 90k fps, so fps=30 is required.
       "-filter_complex",
-      "[0:v]scale=1920:1080,fps=30,setpts=PTS-STARTPTS[bg];[bg][1:v]overlay=0:0:format=auto[v]",
+      "[0:v]scale=1920:1080,fps=30,setpts=PTS-STARTPTS[bg];" +
+        "[1:v]colorkey=0x00ff00:0.3:0.2[ov];" +
+        "[bg][ov]overlay=0:0:format=auto[v]",
       "-map", "[v]",
       "-map", "0:a?",
       "-r", "30",

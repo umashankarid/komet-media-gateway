@@ -37,12 +37,12 @@ export class CourtProcessManager {
   /** Build the FFmpeg args: SRT listener input -> FLV/RTMP output. */
   buildArgs(courtId, rtmpUrl) {
     const port = this.srtPort(courtId);
-    // Match the original single-stream gateway exactly (proven to work on this
-    // setup). No extra input flags: FFmpeg's defaults handled the phone's SRT
-    // stream fine before we split per court.
+    // Proven single-stream command, plus listen_timeout=-1 so the SRT listener
+    // waits indefinitely for the phone (caller) instead of exiting after the
+    // default ~5s when no one has connected yet. This is the only addition.
     return [
       "-i",
-      `srt://0.0.0.0:${port}?mode=listener&latency=${this.srtLatencyMicros}`,
+      `srt://0.0.0.0:${port}?mode=listener&latency=${this.srtLatencyMicros}&listen_timeout=-1`,
       "-c:v",
       "copy",
       "-c:a",

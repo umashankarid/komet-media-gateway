@@ -26,7 +26,7 @@ export class CourtProcessManager {
     /** Log FFmpeg stderr to the gateway console (for diagnostics). */
     this.logFfmpeg = opts.logFfmpeg ?? true;
     /** Delay before respawning FFmpeg after an unexpected exit (ms). */
-    this.restartDelayMs = opts.restartDelayMs ?? 2000;
+    this.restartDelayMs = opts.restartDelayMs ?? 500;
     /** Injectable setTimeout (for tests). */
     this.setTimeoutFn = opts.setTimeoutFn ?? setTimeout;
     /** @type {Map<number, { proc: import("node:child_process").ChildProcess, rtmpUrl: string, startedAt: number, srtPort: number }>} */

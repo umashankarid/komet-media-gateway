@@ -25,6 +25,10 @@ export class CourtProcessManager {
     this.ingestFreshnessMs = opts.ingestFreshnessMs ?? 10000;
     /** Log FFmpeg stderr to the gateway console (for diagnostics). */
     this.logFfmpeg = opts.logFfmpeg ?? true;
+    /** Delay before respawning FFmpeg after an unexpected exit (ms). */
+    this.restartDelayMs = opts.restartDelayMs ?? 2000;
+    /** Injectable setTimeout (for tests). */
+    this.setTimeoutFn = opts.setTimeoutFn ?? setTimeout;
     /** @type {Map<number, { proc: import("node:child_process").ChildProcess, rtmpUrl: string, startedAt: number, srtPort: number }>} */
     this.courts = new Map();
   }
@@ -70,37 +74,44 @@ export class CourtProcessManager {
     // Restart if already running.
     if (this.courts.has(courtId)) this.stop(courtId);
 
-    const args = this.buildArgs(courtId, rtmpUrl);
-    const proc = this.spawnFn("ffmpeg", args);
     const srtPort = this.srtPort(courtId);
+    // "desired: true" means the operator wants this court live; FFmpeg is
+    // (re)spawned until stop() is called. This makes start order not matter:
+    // if FFmpeg exits because no data was flowing yet, it relaunches and keeps
+    // the SRT listener available for when the phone connects.
     const entry = {
-      proc,
+      proc: undefined,
       rtmpUrl,
       startedAt: Date.now(),
       srtPort,
-      // Ingest activity: set once FFmpeg emits encoding progress (data flowing).
       lastProgressAt: 0,
       media: {},
+      desired: true,
+      restartTimer: undefined,
     };
     this.courts.set(courtId, entry);
+    this.spawnFor(courtId);
+    return { courtId, srtPort, rtmpUrl };
+  }
 
-    // FFmpeg writes progress ("frame=... fps=... bitrate=...") to stderr once
-    // video is actually flowing. We treat any such line as "ingest active" and
-    // parse resolution/fps when the stream info appears.
+  /** Spawn (or respawn) the FFmpeg process for a court that is 'desired'. */
+  spawnFor(courtId) {
+    const entry = this.courts.get(courtId);
+    if (!entry || !entry.desired) return;
+    const args = this.buildArgs(courtId, entry.rtmpUrl);
+    const proc = this.spawnFn("ffmpeg", args);
+    entry.proc = proc;
+
     if (proc && proc.stderr && typeof proc.stderr.on === "function") {
       proc.stderr.on("data", (chunk) => {
         const cur = this.courts.get(courtId);
         if (!cur || cur.proc !== proc) return;
         const text = chunk.toString();
         this.parseProgress(cur, text);
-        // Log ffmpeg output so failures are visible in the gateway logs.
-        if (this.logFfmpeg) {
-          process.stderr.write(`[court ${courtId}] ${text}`);
-        }
+        if (this.logFfmpeg) process.stderr.write(`[court ${courtId}] ${text}`);
       });
     }
 
-    // Clean up bookkeeping when the process exits on its own.
     if (proc && typeof proc.on === "function") {
       proc.on("exit", (code, signal) => {
         // eslint-disable-next-line no-console
@@ -108,14 +119,25 @@ export class CourtProcessManager {
           `[court ${courtId}] ffmpeg exited code=${code} signal=${signal}`,
         );
         const cur = this.courts.get(courtId);
-        if (cur && cur.proc === proc) this.courts.delete(courtId);
+        if (!cur || cur.proc !== proc) return;
+        cur.proc = undefined;
+        // Respawn if still desired (e.g. exited before the phone connected).
+        if (cur.desired) {
+          cur.restartTimer = this.setTimeoutFn(() => {
+            this.spawnFor(courtId);
+          }, this.restartDelayMs);
+          if (cur.restartTimer && typeof cur.restartTimer.unref === "function") {
+            cur.restartTimer.unref();
+          }
+        } else {
+          this.courts.delete(courtId);
+        }
       });
       proc.on("error", (err) => {
         // eslint-disable-next-line no-console
         console.log(`[court ${courtId}] ffmpeg spawn error: ${err.message}`);
       });
     }
-    return { courtId, srtPort, rtmpUrl };
   }
 
   /** Parse an FFmpeg stderr chunk: mark progress + extract media info. */
@@ -147,6 +169,12 @@ export class CourtProcessManager {
   stop(courtId) {
     const entry = this.courts.get(courtId);
     if (!entry) return false;
+    // Mark undesired first so the exit handler does not respawn it.
+    entry.desired = false;
+    if (entry.restartTimer) {
+      clearTimeout(entry.restartTimer);
+      entry.restartTimer = undefined;
+    }
     try {
       if (entry.proc && typeof entry.proc.kill === "function") {
         entry.proc.kill("SIGTERM");

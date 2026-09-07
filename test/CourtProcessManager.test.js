@@ -100,13 +100,41 @@ describe("CourtProcessManager", () => {
     assert.equal(m.stop(3), false);
   });
 
-  it("cleans up bookkeeping when ffmpeg exits on its own", () => {
+  it("respawns ffmpeg if it exits while still desired (start-order safe)", () => {
     const spawn = fakeSpawn();
-    const m = new CourtProcessManager({ spawnFn: spawn.fn });
+    // Run the restart timer synchronously for the test.
+    const m = new CourtProcessManager({
+      spawnFn: spawn.fn,
+      logFfmpeg: false,
+      setTimeoutFn: (fn) => {
+        fn();
+        return { unref() {} };
+      },
+    });
     m.start(1, "rtmp://x/live2/a");
-    assert.ok(m.isRunning(1));
+    assert.equal(spawn.calls.length, 1);
+    // FFmpeg exits (e.g. no data yet) → should respawn because still desired.
     spawn.procs[0].emit("exit", 1, null);
+    assert.ok(m.isRunning(1), "court should still be desired/running");
+    assert.equal(spawn.calls.length, 2, "ffmpeg should be respawned");
+  });
+
+  it("does not respawn after stop()", () => {
+    const spawn = fakeSpawn();
+    const m = new CourtProcessManager({
+      spawnFn: spawn.fn,
+      logFfmpeg: false,
+      setTimeoutFn: (fn) => {
+        fn();
+        return { unref() {} };
+      },
+    });
+    m.start(1, "rtmp://x/live2/a");
+    m.stop(1);
     assert.equal(m.isRunning(1), false);
+    // Any exit event after stop must not respawn.
+    spawn.procs[0].emit("exit", 0, "SIGTERM");
+    assert.equal(spawn.calls.length, 1);
   });
 
   it("reports status for running courts sorted by id", () => {

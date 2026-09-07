@@ -48,6 +48,10 @@ describe("CourtProcessManager", () => {
     const args = m.buildArgs(1, "rtmp://a.rtmp.youtube.com/live2/key1");
     assert.ok(args.includes("-i"));
     assert.ok(args.some((a) => a.includes("srt://0.0.0.0:10001?mode=listener")));
+    // -f mpegts must come before -i (describes the incoming SRT container).
+    const fIdx = args.indexOf("mpegts");
+    const iIdx = args.indexOf("-i");
+    assert.ok(fIdx > -1 && fIdx < iIdx, "-f mpegts must precede -i");
     // codec/format flags present
     const joined = args.join(" ");
     assert.ok(joined.includes("-c:v copy"));

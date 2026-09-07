@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { defaultRendererFactory } from "./OverlayRenderer.js";
 
 /**
  * Manages one FFmpeg process per court. Each court has a fixed SRT listener
@@ -29,6 +30,11 @@ export class CourtProcessManager {
     this.restartDelayMs = opts.restartDelayMs ?? 500;
     /** Injectable setTimeout (for tests). */
     this.setTimeoutFn = opts.setTimeoutFn ?? setTimeout;
+    /**
+     * Factory that creates an overlay renderer (Xvfb + Chromium) for a display
+     * and URL. Injectable for tests. Defaults to the real renderer.
+     */
+    this.rendererFactory = opts.rendererFactory ?? defaultRendererFactory;
     /** @type {Map<number, { proc: import("node:child_process").ChildProcess, rtmpUrl: string, startedAt: number, srtPort: number }>} */
     this.courts = new Map();
   }
@@ -38,33 +44,68 @@ export class CourtProcessManager {
     return this.srtBasePort + (courtId - 1);
   }
 
-  /** Build the FFmpeg args: SRT listener input -> FLV/RTMP output. */
-  buildArgs(courtId, rtmpUrl) {
+  /**
+   * Build the FFmpeg args.
+   *  - No overlay: SRT (MPEG-TS) in -> copy video -> FLV/RTMP (cheap).
+   *  - Overlay: SRT video + an X11 display (Chromium rendering the overlay page)
+   *    composited via the overlay filter, then re-encoded to H.264 (heavier).
+   *
+   * @param {number} courtId
+   * @param {string} rtmpUrl
+   * @param {{ overlay?: boolean, display?: string, videoBitrate?: string }} [opts]
+   */
+  buildArgs(courtId, rtmpUrl, opts = {}) {
     const port = this.srtPort(courtId);
-    // The SRT socket is just transport; FFmpeg cannot infer the container, so
-    // it must be told the incoming payload is MPEG-TS. -f mpegts MUST come
-    // before -i (it describes the input). Without it FFmpeg fails with "could
-    // not find codec parameters". listen_timeout=-1 waits for the phone.
+    const srtInput = `srt://0.0.0.0:${port}?mode=listener&latency=${this.srtLatencyMicros}&listen_timeout=-1`;
+
+    if (!opts.overlay) {
+      // Lightweight passthrough (no re-encode).
+      return [
+        "-f", "mpegts",
+        "-i", srtInput,
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-f", "flv",
+        rtmpUrl,
+      ];
+    }
+
+    // Overlay burn-in: composite the X11 display (transparent overlay page,
+    // rendered by Chromium into Xvfb) over the phone video, then encode.
+    const display = opts.display || ":99";
+    const vBitrate = opts.videoBitrate || "6000k";
     return [
-      "-f",
-      "mpegts",
-      "-i",
-      `srt://0.0.0.0:${port}?mode=listener&latency=${this.srtLatencyMicros}&listen_timeout=-1`,
-      "-c:v",
-      "copy",
-      "-c:a",
-      "aac",
-      "-f",
-      "flv",
+      "-f", "mpegts",
+      "-i", srtInput,
+      // Second input: the virtual display where Chromium renders the overlay.
+      "-f", "x11grab",
+      "-framerate", "30",
+      "-video_size", "1920x1080",
+      "-i", display,
+      // Overlay the captured page (in2) onto the scaled phone video (in1).
+      "-filter_complex",
+      "[0:v]scale=1920:1080[bg];[bg][1:v]overlay=0:0:format=auto[v]",
+      "-map", "[v]",
+      "-map", "0:a?",
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-tune", "zerolatency",
+      "-b:v", vBitrate,
+      "-pix_fmt", "yuv420p",
+      "-g", "60",
+      "-c:a", "aac",
+      "-f", "flv",
       rtmpUrl,
     ];
   }
 
   /**
-   * Start (or restart) streaming for a court to the given RTMP URL.
-   * @returns {{ courtId: number, srtPort: number, rtmpUrl: string }}
+   * Start (or restart) streaming for a court.
+   * @param {number} courtId
+   * @param {string} rtmpUrl
+   * @param {{ overlay?: boolean, overlayUrl?: string }} [options]
    */
-  start(courtId, rtmpUrl) {
+  start(courtId, rtmpUrl, options = {}) {
     if (!Number.isInteger(courtId) || courtId < 1) {
       throw new Error("courtId must be a positive integer");
     }
@@ -75,10 +116,9 @@ export class CourtProcessManager {
     if (this.courts.has(courtId)) this.stop(courtId);
 
     const srtPort = this.srtPort(courtId);
-    // "desired: true" means the operator wants this court live; FFmpeg is
-    // (re)spawned until stop() is called. This makes start order not matter:
-    // if FFmpeg exits because no data was flowing yet, it relaunches and keeps
-    // the SRT listener available for when the phone connects.
+    // Each overlay court gets its own X11 display (:99 + courtId) so multiple
+    // courts don't collide.
+    const display = `:${99 + courtId}`;
     const entry = {
       proc: undefined,
       rtmpUrl,
@@ -88,17 +128,35 @@ export class CourtProcessManager {
       media: {},
       desired: true,
       restartTimer: undefined,
+      overlay: Boolean(options.overlay),
+      overlayUrl: options.overlayUrl,
+      display,
+      renderer: undefined,
     };
     this.courts.set(courtId, entry);
+
+    // For overlay mode, start the headless renderer (Xvfb + Chromium) that
+    // paints the overlay page into this court's X11 display before FFmpeg
+    // captures it.
+    if (entry.overlay && entry.overlayUrl && this.rendererFactory) {
+      entry.renderer = this.rendererFactory(display, entry.overlayUrl);
+      if (entry.renderer && typeof entry.renderer.start === "function") {
+        entry.renderer.start();
+      }
+    }
+
     this.spawnFor(courtId);
-    return { courtId, srtPort, rtmpUrl };
+    return { courtId, srtPort, rtmpUrl, overlay: entry.overlay };
   }
 
   /** Spawn (or respawn) the FFmpeg process for a court that is 'desired'. */
   spawnFor(courtId) {
     const entry = this.courts.get(courtId);
     if (!entry || !entry.desired) return;
-    const args = this.buildArgs(courtId, entry.rtmpUrl);
+    const args = this.buildArgs(courtId, entry.rtmpUrl, {
+      overlay: entry.overlay,
+      display: entry.display,
+    });
     const proc = this.spawnFn("ffmpeg", args);
     entry.proc = proc;
 
@@ -174,6 +232,9 @@ export class CourtProcessManager {
     if (entry.restartTimer) {
       clearTimeout(entry.restartTimer);
       entry.restartTimer = undefined;
+    }
+    if (entry.renderer && typeof entry.renderer.stop === "function") {
+      try { entry.renderer.stop(); } catch { /* ignore */ }
     }
     try {
       if (entry.proc && typeof entry.proc.kill === "function") {

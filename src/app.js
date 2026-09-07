@@ -66,7 +66,9 @@ export function createApp(manager, opts = {}) {
     handle((req, res) => {
       const courtId = parseCourtId(req);
       const rtmpUrl = req.body?.rtmpUrl;
-      const result = manager.start(courtId, rtmpUrl);
+      const overlay = Boolean(req.body?.overlay);
+      const overlayUrl = typeof req.body?.overlayUrl === "string" ? req.body.overlayUrl : undefined;
+      const result = manager.start(courtId, rtmpUrl, { overlay, overlayUrl });
       res.json({ ok: true, ...result });
     }),
   );

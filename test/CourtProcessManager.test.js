@@ -157,6 +157,48 @@ describe("CourtProcessManager", () => {
     assert.equal(m.status().length, 0);
   });
 
+  it("builds a copy pipeline when overlay is off", () => {
+    const m = new CourtProcessManager({ spawnFn: fakeSpawn().fn });
+    const args = m.buildArgs(1, "rtmp://x/live2/a", { overlay: false });
+    assert.ok(args.join(" ").includes("-c:v copy"));
+    assert.ok(!args.join(" ").includes("libx264"));
+  });
+
+  it("builds an overlay/encode pipeline with x11grab when overlay is on", () => {
+    const m = new CourtProcessManager({ spawnFn: fakeSpawn().fn });
+    const args = m.buildArgs(1, "rtmp://x/live2/a", { overlay: true, display: ":100" });
+    const j = args.join(" ");
+    assert.ok(j.includes("x11grab"), "should grab the X display");
+    assert.ok(j.includes(":100"), "should use the given display");
+    assert.ok(j.includes("overlay=0:0"), "should composite overlay");
+    assert.ok(j.includes("libx264"), "should re-encode");
+    assert.ok(!j.includes("-c:v copy"), "must not copy when overlaying");
+  });
+
+  it("starts and stops an overlay renderer for overlay mode", () => {
+    const events = [];
+    const rendererFactory = (display, url) => ({
+      start() { events.push(["start", display, url]); },
+      stop() { events.push(["stop", display, url]); },
+    });
+    const m = new CourtProcessManager({ spawnFn: fakeSpawn().fn, rendererFactory });
+    m.start(1, "rtmp://x/live2/a", {
+      overlay: true,
+      overlayUrl: "https://stream/broadcast-overlay?court=1&mode=full",
+    });
+    assert.deepEqual(events[0], ["start", ":100", "https://stream/broadcast-overlay?court=1&mode=full"]);
+    m.stop(1);
+    assert.equal(events.some((e) => e[0] === "stop"), true);
+  });
+
+  it("does not start a renderer when overlay is off", () => {
+    let created = false;
+    const rendererFactory = () => { created = true; return { start() {}, stop() {} }; };
+    const m = new CourtProcessManager({ spawnFn: fakeSpawn().fn, rendererFactory });
+    m.start(1, "rtmp://x/live2/a", { overlay: false });
+    assert.equal(created, false);
+  });
+
   it("reports connected only after ffmpeg emits progress", () => {
     const spawn = fakeSpawn();
     const m = new CourtProcessManager({ spawnFn: spawn.fn });

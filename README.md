@@ -17,16 +17,20 @@ Each court has a fixed SRT port: court N listens on `SRT_BASE_PORT + N - 1`.
 Default: Court 1 = 10001, Court 2 = 10002, Court 3 = 10003, Court 4 = 10004.
 
 Video is stream-copied (`-c:v copy`) to stay light on a 2-vCPU VPS; audio is
-transcoded to AAC. No overlay burn-in yet.
+transcoded to AAC. When overlay burn-in is requested for a court, that court
+switches to an encode pipeline: Chromium renders the overlay page into a
+virtual X display (Xvfb) and FFmpeg composites it over the phone video and
+re-encodes H.264. Overlay burn-in is CPU-heavy (~1 core per court at 720p30) —
+budget accordingly on limited hardware.
 
 ## Control API
 
 All routes except `/healthz` require `Authorization: Bearer <GATEWAY_TOKEN>`.
 
 - `GET  /healthz` — health check (unauthenticated).
-- `GET  /status` — list running courts.
+- `GET  /status` — list running courts (incl. camera connectivity/media).
 - `GET  /courts/:id/status` — one court's status.
-- `POST /courts/:id/start` — body `{ "rtmpUrl": "rtmp://a.rtmp.youtube.com/live2/<key>" }`.
+- `POST /courts/:id/start` — body `{ "rtmpUrl": "...", "overlay": true, "overlayUrl": "https://stream.bmkkomet.se/broadcast-overlay?court=1&mode=full" }`.
 - `POST /courts/:id/stop` — stop that court.
 
 ## Environment variables

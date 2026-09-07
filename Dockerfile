@@ -2,10 +2,13 @@
 # spawns one FFmpeg process per active court (SRT ingest -> YouTube RTMP).
 FROM node:20-bookworm-slim
 
-# FFmpeg for the media pipeline; curl for the Coolify healthcheck.
+# FFmpeg for the media pipeline; curl for the Coolify healthcheck; Xvfb +
+# Chromium for overlay burn-in (headless rendering of the overlay page).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg curl \
+  && apt-get install -y --no-install-recommends ffmpeg curl xvfb chromium \
   && rm -rf /var/lib/apt/lists/*
+
+ENV CHROMIUM_BIN=chromium
 
 WORKDIR /app
 

@@ -35,9 +35,11 @@ export class CourtProcessManager {
   /** Build the FFmpeg args: SRT listener input -> FLV/RTMP output. */
   buildArgs(courtId, rtmpUrl) {
     const port = this.srtPort(courtId);
+    // listen_timeout=-1 keeps the SRT listener waiting indefinitely for the
+    // phone (caller) instead of exiting after a few seconds.
     return [
       "-i",
-      `srt://0.0.0.0:${port}?mode=listener&latency=${this.srtLatencyMicros}`,
+      `srt://0.0.0.0:${port}?mode=listener&latency=${this.srtLatencyMicros}&listen_timeout=-1`,
       "-c:v",
       "copy",
       "-c:a",

@@ -31,7 +31,7 @@ export class OverlayRenderer {
   }
 
   start() {
-    const size = "1920x1080x24";
+    const size = "1280x720x24";
     // 1) Virtual framebuffer for this display.
     this.xvfb = this.spawnFn("Xvfb", [this.display, "-screen", "0", size, "-nolisten", "tcp"]);
     this.xvfb.on?.("error", (e) =>
@@ -49,7 +49,7 @@ export class OverlayRenderer {
           "--disable-dev-shm-usage",
           "--kiosk",
           "--window-position=0,0",
-          "--window-size=1920,1080",
+          "--window-size=1280,720",
           // Transparent background so the overlay composites cleanly.
           "--default-background-color=00000000",
           "--force-device-scale-factor=1",

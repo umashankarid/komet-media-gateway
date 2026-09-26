@@ -77,20 +77,24 @@ export class CourtProcessManager {
     const display = opts.display || ":99";
     const vBitrate = opts.videoBitrate || "3500k";
     return [
-      "-thread_queue_size", "512",
-      "-fflags", "+genpts",
+      // SRT input resilience: large receive buffers + a reconnect-friendly URL
+      // so a brief phone/network hiccup doesn't kill FFmpeg with an I/O error.
+      "-thread_queue_size", "4096",
+      "-fflags", "+genpts+discardcorrupt",
+      "-probesize", "5000000",
+      "-analyzeduration", "5000000",
       "-f", "mpegts",
       "-i", srtInput,
-      "-thread_queue_size", "512",
+      // Overlay grab at 720p (matches the Xvfb size) so no per-frame downscale.
+      "-thread_queue_size", "1024",
       "-f", "x11grab",
       "-framerate", "30",
-      "-video_size", "1920x1080",
+      "-video_size", "1280x720",
       "-i", display,
-      // Keep phone video at 720p @ 30fps; colorkey the overlay's green out,
-      // scale the (1080p) grab down to 720p, then overlay it.
+      // Phone video to 720p@30; colorkey the overlay's green out; overlay it.
       "-filter_complex",
       "[0:v]scale=1280:720,fps=30,setpts=PTS-STARTPTS[bg];" +
-        "[1:v]colorkey=0x00ff00:0.3:0.2,scale=1280:720[ov];" +
+        "[1:v]colorkey=0x00ff00:0.3:0.2[ov];" +
         "[bg][ov]overlay=0:0:format=auto[v]",
       "-map", "[v]",
       "-map", "0:a?",
